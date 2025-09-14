@@ -1,0 +1,5 @@
+---
+description: this is a hackathon project and we dont need be fancy and use argparse for simple scripts. we dont need header comments for functions either. annotate types for functions and variables are not needed. dont use try except blocks unless *absolutely necessary*. argparse is not needed for simple scripts.
+globs:
+alwaysApply: true
+---
