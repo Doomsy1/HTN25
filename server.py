@@ -5,7 +5,7 @@ import threading
 import time
 import cv2  # type: ignore
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -41,7 +41,8 @@ APP = FastAPI(title="HTN25 Stereo API", version="0.1.0")
 
 # Calibration state
 _calibration_lock = threading.Lock()
-_is_calibrating = False
+_is_calibrating_projector = False
+_is_calibrating_ball = False
 _last_calibration_time_iso = None
 _last_ball_calibration_time_iso = None
 
@@ -146,25 +147,31 @@ class SingleBallStore:
 _ball_store = SingleBallStore(expire_ms=250, vel_window_ms=150)
 
 
-def _run_calibration_background() -> None:
-    global _is_calibrating, _last_calibration_time_iso, _projector_calib_data, _ball_calib_data
+def _run_projector_calibration_background() -> None:
+    global _is_calibrating_projector, _last_calibration_time_iso, _projector_calib_data
     try:
         out_data, out_path = calibrate_projector_corners_stereo(show=False)
         if out_data is not None:
             _last_calibration_time_iso = out_data.get("timestamp")
             _projector_calib_data = out_data
-            # Also perform ball-tracker calibration and persist it for server use
-            try:
-                _calibrate_ball_tracker(out_data)
-                # Refresh cache from disk in case writer normalizes
-                _ball_calib_data = _try_load_json(BALL_JSON_PATH)
-            except Exception:
-                # Ball calibration is best-effort; ignore failures
-                pass
     finally:
         # Mark as done
         with _calibration_lock:
-            _is_calibrating = False
+            _is_calibrating_projector = False
+
+
+def _run_ball_calibration_background() -> None:
+    global _is_calibrating_ball, _ball_calib_data
+    try:
+        proj = _projector_calib_data or _try_load_json(PROJECTOR_JSON_PATH)
+        if proj is None:
+            # Nothing to do; projector calibration missing
+            return
+        _calibrate_ball_tracker(proj)
+        _ball_calib_data = _try_load_json(BALL_JSON_PATH)
+    finally:
+        with _calibration_lock:
+            _is_calibrating_ball = False
 
 
 def _calibrate_ball_tracker(projector_calib: Dict[str, Any]) -> None:
@@ -257,23 +264,35 @@ def _write_ball_calibration(data: Dict[str, Any]) -> None:
         print(f"[server] Failed to save ball calibration: {exc}")
 
 
-@APP.post("/calibrate")
-def start_calibration():
-    global _is_calibrating
+@APP.post("/calibrate_projector")
+def start_calibration_projector():
+    global _is_calibrating_projector
     with _calibration_lock:
-        if _is_calibrating:
-            raise HTTPException(status_code=409, detail="Calibration already in progress")
-        _is_calibrating = True
-    t = threading.Thread(target=_run_calibration_background, daemon=True)
+        if _is_calibrating_projector:
+            raise HTTPException(status_code=409, detail="Projector calibration already in progress")
+        _is_calibrating_projector = True
+    t = threading.Thread(target=_run_projector_calibration_background, daemon=True)
+    t.start()
+    return JSONResponse(status_code=202, content={"started": True})
+
+
+@APP.post("/calibrate_ball")
+def start_calibration_ball():
+    global _is_calibrating_ball
+    with _calibration_lock:
+        if _is_calibrating_ball:
+            raise HTTPException(status_code=409, detail="Ball calibration already in progress")
+        _is_calibrating_ball = True
+    t = threading.Thread(target=_run_ball_calibration_background, daemon=True)
     t.start()
     return JSONResponse(status_code=202, content={"started": True})
 
 
 @APP.get("/is_calibrated")
 def is_calibrated() -> bool:
-    # Per spec: return True if calibrate() is NOT currently running
+    # True if neither projector nor ball calibration is currently running
     with _calibration_lock:
-        return not _is_calibrating
+        return (not _is_calibrating_projector) and (not _is_calibrating_ball)
 
 
 @APP.get("/get_corners")
@@ -291,7 +310,8 @@ def get_corners():
 def get_ball():
     event = _ball_store.get_and_clear()
     if event is None:
-        return JSONResponse(status_code=204, content=None)
+        # For 204, return an empty body to avoid Content-Length mismatch
+        return Response(status_code=204)
     return event
 
 
