@@ -278,7 +278,7 @@ def main():
         required=DEFAULT_REQUIRED_STABLE,
         tolerance=DEFAULT_TOLERANCE_PCT,
         out=DEFAULT_OUTPUT_JSON,
-        show=True,
+        show=False,
     )
     return 0
 

@@ -33,7 +33,7 @@ from gestures import GesturesEngine  # type: ignore
 # Display/visualization
 # - SHOW_DEBUG_WINDOWS_DEFAULT: Whether to show per-camera annotated preview windows for debugging.
 # - DEBUG_WINDOW_SIZE_PX: Size (width, height) of each debug window in pixels.
-SHOW_DEBUG_WINDOWS_DEFAULT = True
+SHOW_DEBUG_WINDOWS_DEFAULT = False
 DEBUG_WINDOW_SIZE_PX = (640, 360)
 
 # Cursor smoothing (projector pixel space)
