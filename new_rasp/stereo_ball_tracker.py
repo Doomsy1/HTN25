@@ -158,6 +158,15 @@ def main():
             H_plane_to_proj = cv2.getPerspectiveTransform(plane_quad, proj_corners_px.astype(np.float32))
     except Exception:
         H_plane_to_proj = None
+    if H_plane_to_proj is None:
+        try:
+            print("[WARN] No projector homography; will not post 2D pixels. Check calibration JSON keys 'projector_corners_px' and 'screen_corners_3d'/'screen_corners_3d_m'.")
+        except Exception:
+            pass
+    try:
+        print(f"[INFO] Posting to: {SERVER_OFFER_URL}")
+    except Exception:
+        pass
 
     def process_one(cam_id, frame):
         if flip_view:
@@ -229,6 +238,8 @@ def main():
             status_txt = "POST:OK" if last_post_ok else "POST:FAIL"
             color = (60, 220, 60) if last_post_ok else (40, 40, 220)
             cv2.putText(frame_res, status_txt, (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+        if H_plane_to_proj is None:
+            cv2.putText(frame_res, "NO H", (10, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
         until = CALIB_MSG_UNTIL_BY_CAM.get(cam_id, 0.0)
         if time.time() < until:
             cv2.putText(frame_res, "Calibrated", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)

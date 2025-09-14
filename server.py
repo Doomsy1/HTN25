@@ -1,3 +1,96 @@
+import time
+import threading
+import logging
+
+from fastapi import FastAPI, HTTPException, Response, Body
+
+
+# Minimal logger
+_log = logging.getLogger("HTN25")
+if not _log.handlers:
+    _log.setLevel(logging.INFO)
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s"))
+    _log.addHandler(_h)
+
+
+APP = FastAPI(title="HTN25 Minimal Ball Server", version="0.2.0")
+
+
+# Single in-memory event (pop-once)
+_lock = threading.Lock()
+_current_event = None  # dict or None
+
+
+def _set_event(evt):
+    global _current_event
+    with _lock:
+        _current_event = evt
+
+
+def _pop_event():
+    global _current_event
+    with _lock:
+        evt = _current_event
+        _current_event = None
+        return evt
+
+
+@APP.get("/health")
+def health():
+    return {"ok": True}
+
+
+@APP.get("/get_ball")
+def get_ball():
+    evt = _pop_event()
+    if evt is None:
+        return Response(status_code=204)
+    return evt
+
+
+@APP.post("/offer_ball")
+def offer_ball(payload: dict = Body(...)):
+    # Accept either projector pixel space or meters
+    pos_px = payload.get("position_px")
+    pos_m = payload.get("position_m") or payload.get("position") or payload.get("p")
+    t = payload.get("t")
+
+    ts = float(time.time() if t is None else t)
+
+    if pos_px is not None:
+        if not isinstance(pos_px, (list, tuple)) or len(pos_px) != 2:
+            raise HTTPException(status_code=400, detail="position_px must be [x,y]")
+        x = float(pos_px[0]); y = float(pos_px[1])
+        evt = {"t": ts, "space": "projector_px", "position_px": [x, y]}
+        _set_event(evt)
+        _log.info(f"offer_ball px=({x:.1f},{y:.1f})")
+        return {"ok": True}
+
+    if pos_m is not None:
+        if not isinstance(pos_m, (list, tuple)) or len(pos_m) != 3:
+            raise HTTPException(status_code=400, detail="position_m must be [x,y,z]")
+        px = float(pos_m[0]); py = float(pos_m[1]); pz = float(pos_m[2])
+        evt = {"t": ts, "space": "meters", "position_m": [px, py, pz]}
+        _set_event(evt)
+        _log.info(f"offer_ball m=({px:.3f},{py:.3f},{pz:.3f})")
+        return {"ok": True}
+
+    raise HTTPException(status_code=400, detail="payload must include position_px or position_m")
+
+
+if __name__ == "__main__":
+    # Run with: py server.py
+    import uvicorn  # type: ignore
+
+    uvicorn.run(
+        "server:APP",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        factory=False,
+    )
+
 import os
 import sys
 import json
@@ -317,11 +410,19 @@ def api_offer_ball(payload: dict = Body(...)):
     if pos_px is not None:
         if not isinstance(pos_px, (list, tuple)) or len(pos_px) != 2:
             raise HTTPException(status_code=400, detail="position_px must be [x,y]")
+        try:
+            _logger.info(f"offer_ball POST received (px): x={float(pos_px[0]):.1f}, y={float(pos_px[1]):.1f}")
+        except Exception:
+            pass
         offer_ball(position_px=pos_px, t=t)
         return {"ok": True}
     if pos_m is not None:
         if not isinstance(pos_m, (list, tuple)) or len(pos_m) != 3:
             raise HTTPException(status_code=400, detail="position_m must be [x,y,z]")
+        try:
+            _logger.info(f"offer_ball POST received (m): x={float(pos_m[0]):.3f}, y={float(pos_m[1]):.3f}, z={float(pos_m[2]):.3f}")
+        except Exception:
+            pass
         offer_ball(position_m=pos_m, t=t)
         return {"ok": True}
     raise HTTPException(status_code=400, detail="payload must include position_px or position_m")
