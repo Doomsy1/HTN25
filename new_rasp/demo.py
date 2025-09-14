@@ -1,9 +1,10 @@
 import os
 import sys
+import subprocess
 import threading
 import time
-from typing import Optional, Tuple
-
+import tkinter as tk
+from tkinter import ttk
 import cv2
 
 
@@ -11,97 +12,224 @@ def _here(*paths: str) -> str:
     return os.path.join(os.path.dirname(__file__), *paths)
 
 
-def _generate_or_load_grid() -> str:
-    try:
-        # Prefer generating to ensure it matches current config
+class LauncherUI:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("HTN25 Launcher")
+        # Pin window on top
         try:
-            from create_aruco_png import generate_aruco_corners_image  # when run from within new_rasp/
+            self.root.attributes("-topmost", True)
         except Exception:
-            from new_rasp.create_aruco_png import generate_aruco_corners_image  # when run from repo root
+            pass
 
-        return generate_aruco_corners_image()
-    except Exception:
-        # Fallback to an existing image in the same directory
-        fallback = _here("aruco_grid.png")
-        if not os.path.exists(fallback):
-            raise
-        return fallback
+        # Fixed small size
+        try:
+            self.root.resizable(False, False)
+            # Very small window at top-left corner
+            self.root.geometry("120x90+0+0")
+        except Exception:
+            pass
 
+        self.calib_proc = None
+        self.demo_proc = None
+        self.grid_thread = None
+        self.grid_stop = None
 
-def _run_calibration_in_thread(outcome: dict):
-    # Run headless to avoid extra OpenCV windows; keep only the fullscreen grid visible
-    try:
-        from calibrate_projector_corners_stereo import calibrate_projector_corners_stereo  # when run from within new_rasp/
-    except Exception:
-        from new_rasp.calibrate_projector_corners_stereo import calibrate_projector_corners_stereo  # when run from repo root
+        frame = ttk.Frame(self.root, padding=6)
+        frame.pack(fill=tk.BOTH, expand=True)
 
-    try:
-        out_data, out_path = calibrate_projector_corners_stereo(show=False)
-        outcome["data"] = out_data
-        outcome["path"] = out_path
-    except Exception as exc:
-        outcome["error"] = exc
+        # Two small square buttons side-by-side
+        frame.columnconfigure(0, weight=1, uniform="b")
+        frame.columnconfigure(1, weight=1, uniform="b")
+        frame.rowconfigure(0, weight=1)
 
+        # Use tk.Button to control width/height in text units (approx square)
+        self.btn_calib = tk.Button(frame, text="Cal", width=4, height=2, command=self.start_calibration)
+        self.btn_calib.grid(row=0, column=0, padx=4, pady=4, sticky="nsew")
 
-def _show_fullscreen(image_path: str, should_close: callable) -> None:
-    img = cv2.imread(image_path)
-    if img is None:
-        raise RuntimeError(f"Failed to read image: {image_path}")
+        self.btn_demo = tk.Button(frame, text="Demo", width=4, height=2, command=self.start_demo)
+        self.btn_demo.grid(row=0, column=1, padx=4, pady=4, sticky="nsew")
 
-    win = "Projector Grid"
-    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-    try:
-        cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    except Exception:
-        # Older OpenCV builds may not support this; best effort
-        pass
+        # Handle window close
+        try:
+            self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        except Exception:
+            pass
 
-    while True:
-        cv2.imshow(win, img)
-        key = cv2.waitKey(16) & 0xFF
-        if key == ord('q'):
-            break
-        if should_close():
-            break
+        # Periodic poll to update button states/text
+        self.root.after(300, self._poll_children)
 
-    cv2.destroyWindow(win)
+    def _poll_children(self) -> None:
+        # Update states based on running child processes
+        calib_alive = (self.calib_proc is not None) and (self.calib_proc.poll() is None)
+        demo_alive = (self.demo_proc is not None) and (self.demo_proc.poll() is None)
+
+        # Keep buttons enabled for toggle; update labels to reflect stop state
+        self.btn_calib.configure(text=("Stop Cal" if calib_alive else "Cal"), state=tk.NORMAL)
+        self.btn_demo.configure(text=("Stop Demo" if demo_alive else "Demo"), state=tk.NORMAL)
+
+        # If grid thread requested stop (e.g., 'q' pressed), stop calibration process
+        if self.grid_stop is not None and self.grid_stop.is_set() and calib_alive:
+            self._stop_process("calib_proc")
+
+        # If calibration finished, close grid window and auto-start demo (if not already running)
+        if (not calib_alive) and (self.calib_proc is not None):
+            if self.grid_stop is not None:
+                try:
+                    self.grid_stop.set()
+                except Exception:
+                    pass
+                # Let the grid thread exit; we don't need to join here
+            # Autostart demo if it's not running
+            if not demo_alive:
+                self._start_demo_subprocess()
+            # Clear reference so we don't re-trigger
+            self.calib_proc = None
+
+        self.root.after(500, self._poll_children)
+
+    def _stop_process(self, proc_attr: str, wait_timeout: float = 0.8) -> None:
+        proc = getattr(self, proc_attr, None)
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=wait_timeout)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        finally:
+            setattr(self, proc_attr, None)
+
+    def _generate_or_load_grid(self) -> str:
+        here = os.path.dirname(__file__)
+        try:
+            try:
+                from create_aruco_png import generate_aruco_corners_image  # when run from within new_rasp/
+            except Exception:
+                from new_rasp.create_aruco_png import generate_aruco_corners_image  # when run from repo root
+            return generate_aruco_corners_image()
+        except Exception:
+            fallback = os.path.join(here, "aruco_grid.png")
+            if not os.path.exists(fallback):
+                raise
+            return fallback
+
+    def _show_fullscreen_grid(self, image_path: str, stop_event: threading.Event) -> None:
+        img = cv2.imread(image_path)
+        if img is None:
+            return
+        win = "Projector Grid"
+        try:
+            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty(win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        except Exception:
+            pass
+        try:
+            while not stop_event.is_set():
+                cv2.imshow(win, img)
+                key = cv2.waitKey(16) & 0xFF
+                if key == ord('q'):
+                    stop_event.set()
+                    break
+        finally:
+            try:
+                cv2.destroyWindow(win)
+            except Exception:
+                pass
+
+    def start_calibration(self) -> None:
+        # Toggle: if calibration is running, stop it
+        if (self.calib_proc is not None) and (self.calib_proc.poll() is None):
+            self._stop_process("calib_proc")
+            # Stop fullscreen grid if showing
+            if self.grid_stop is not None:
+                try:
+                    self.grid_stop.set()
+                except Exception:
+                    pass
+            return
+        # Ensure only one instance total: stop demo if running
+        if (self.demo_proc is not None) and (self.demo_proc.poll() is None):
+            self._stop_process("demo_proc")
+        # Start fullscreen grid
+        try:
+            grid_path = self._generate_or_load_grid()
+            self.grid_stop = threading.Event()
+            self.grid_thread = threading.Thread(target=self._show_fullscreen_grid, args=(grid_path, self.grid_stop), daemon=True)
+            self.grid_thread.start()
+        except Exception:
+            self.grid_stop = None
+            self.grid_thread = None
+        script = _here("calibrate_projector_corners_stereo.py")
+        # Launch using Windows 'py' per user preference
+        try:
+            self.calib_proc = subprocess.Popen(["py", script], cwd=os.path.dirname(script))
+        except Exception:
+            pass
+
+    def start_demo(self) -> None:
+        # Toggle: if demo is running, stop it
+        if (self.demo_proc is not None) and (self.demo_proc.poll() is None):
+            self._stop_process("demo_proc")
+            return
+        # Ensure only one instance total: stop calibration if running
+        if (self.calib_proc is not None) and (self.calib_proc.poll() is None):
+            self._stop_process("calib_proc")
+        # Ensure grid is closed if open
+        if self.grid_stop is not None:
+            try:
+                self.grid_stop.set()
+            except Exception:
+                pass
+        script = _here("stereo_projection_demo.py")
+        try:
+            self.demo_proc = subprocess.Popen(["py", script], cwd=os.path.dirname(script))
+        except Exception:
+            pass
+
+    def _start_demo_subprocess(self) -> None:
+        # Helper that starts demo without toggling/stop logic, used after calibration
+        if (self.demo_proc is not None) and (self.demo_proc.poll() is None):
+            return
+        # Ensure grid is closed
+        if self.grid_stop is not None:
+            try:
+                self.grid_stop.set()
+            except Exception:
+                pass
+        script = _here("stereo_projection_demo.py")
+        try:
+            self.demo_proc = subprocess.Popen(["py", script], cwd=os.path.dirname(script))
+        except Exception:
+            pass
+
+    def on_close(self) -> None:
+        # Stop any running children before closing
+        self._stop_process("calib_proc")
+        self._stop_process("demo_proc")
+        if self.grid_stop is not None:
+            try:
+                self.grid_stop.set()
+            except Exception:
+                pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
 
 def main() -> int:
-    # 1) Ensure grid exists
-    grid_path = _generate_or_load_grid()
-
-    # 2) Start calibration in background
-    outcome: dict = {"data": None, "path": None, "error": None}
-    th = threading.Thread(target=_run_calibration_in_thread, args=(outcome,), daemon=True)
-    th.start()
-
-    # 3) Keep grid fullscreen until calibration completes (or user presses 'q')
-    _show_fullscreen(grid_path, should_close=lambda: not th.is_alive())
-
-    # Ensure calibration thread is finished
-    th.join(timeout=0.1)
-
-    if outcome.get("error") is not None:
-        print(f"Calibration failed: {outcome['error']}")
-    else:
-        print(f"Calibration complete. Saved: {outcome.get('path')}")
-
-    # 4) Launch stereo projection demo using the new reusable entrypoint
-    calib_path = _here("screen_corners_3d.json")
-    if not os.path.exists(calib_path):
-        print(f"Calibration file not found at {calib_path}. Exiting.")
-        return 1
-
-    try:
-        from stereo_projection_demo import run_stereo_projection  # when run from within new_rasp/
-    except Exception:
-        from new_rasp.stereo_projection_demo import run_stereo_projection  # when run from repo root
-
-    return run_stereo_projection(
-        calib_path,
-        show_debug_windows=True,
-    )
+    root = tk.Tk()
+    LauncherUI(root)
+    root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":

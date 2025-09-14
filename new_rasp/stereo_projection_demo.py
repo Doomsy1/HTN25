@@ -76,7 +76,7 @@ SCREEN_OFFSET_PX = (0, 0)
 # - PRESS_THRESHOLD_M: 3D distance to the screen plane considered "touch/near" for gating actions.
 # - PRESS_DEBOUNCE_SEC: Time required inside threshold before considering it a press candidate.
 # - RELEASE_DEBOUNCE_SEC: Time required outside threshold to release a press in non-gesture mode.
-PRESS_THRESHOLD_M = 0.12
+PRESS_THRESHOLD_M = 0.03
 PRESS_DEBOUNCE_SEC = 0.050
 RELEASE_DEBOUNCE_SEC = 0.100
 
