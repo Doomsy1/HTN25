@@ -240,7 +240,7 @@ def calibrate_projector_corners_stereo(url1="rtsp://10.37.111.247:8554/cam1",
                         "source_urls": [url1, url2],
                         "image_size": [int(w), int(h)],
                         "intrinsics": {"fx": float(fx), "fy": float(fy), "cx": float(cx), "cy": float(cy), "hfov_deg": float(hfov_deg), "baseline_m": float(baseline_m)},
-                        "projector_corners_px": [[0.0, 0.0], [1350.0, 0.0], [1350.0, 900.0], [0.0, 900.0]], #TODO
+                        "projector_corners_px": [[0.0, 0.0], [910.0, 0.0], [910.0, 605.0], [0.0, 605.0]], #TODO
                         "screen_corners_2d": {
                             "cam1": [[float(x), float(y)] for (x, y) in corners_cam1.tolist()],
                             "cam2": [[float(x), float(y)] for (x, y) in corners_cam2.tolist()],

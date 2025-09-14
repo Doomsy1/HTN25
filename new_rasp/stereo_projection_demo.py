@@ -65,7 +65,7 @@ DEBUG_WINDOW_SIZE_PX = (640, 360)
 # Cursor smoothing (projector pixel space)
 # - EMA_ALPHA: Exponential moving average factor for cursor smoothing.
 #   0.0 = no smoothing (instant). Higher values weight new positions more (less smoothing).
-EMA_ALPHA = 0.15
+EMA_ALPHA = 0.25
 
 # Projector/desktop alignment
 # - SCREEN_OFFSET_PX: OS desktop offset (x, y) for the projector top-left corner, in pixels.

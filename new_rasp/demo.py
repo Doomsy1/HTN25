@@ -101,11 +101,6 @@ def main() -> int:
     return run_stereo_projection(
         calib_path,
         show_debug_windows=True,
-        ema_alpha=0.15,
-        screen_offset_px=(0, 0),
-        press_threshold_m=0.10,
-        release_debounce_sec=0.150,
-        press_debounce_sec=0.020,
     )
 
 
