@@ -4,7 +4,6 @@ import json
 import time
 import math
 import threading
-from typing import Optional, Tuple
 
 import numpy as np
 import cv2
@@ -12,41 +11,16 @@ import ctypes
 import urllib.request
 
 # Reuse stream and handtracking utilities
-try:
-    from new_rasp.streamcam import start_camera
-except Exception:
-    from streamcam import start_camera  # type: ignore
+from streamcam import start_camera  # type: ignore
 
-try:
-    from new_rasp.handtracking_processor import HandTrackingProcessor
-    from new_rasp.handtracking_utils import render_hands, draw_hands_with_index
-except Exception:
-    from handtracking_processor import HandTrackingProcessor  # type: ignore
-    from handtracking_utils import render_hands, draw_hands_with_index  # type: ignore
+from handtracking_processor import HandTrackingProcessor  # type: ignore
+from handtracking_utils import render_hands, draw_hands_with_index  # type: ignore
 
-try:
-    # Reuse drawing helper and import core stereo utils from central module
-    from new_rasp.stereo_utils import (
-        triangulate_index,
-        recommended_hfov_deg,
-        load_calibration,
-        project_point_to_plane,
-        signed_distance_to_plane,
-        calc_plane_basis,
-        solve_plane_uv,
-        clamp01,
-    )
-except Exception:
-    from stereo_utils import triangulate_index, recommended_hfov_deg, load_calibration, project_point_to_plane, signed_distance_to_plane, calc_plane_basis, solve_plane_uv, clamp01  # type: ignore
+# Reuse drawing helper and import core stereo utils from central module
+from stereo_utils import triangulate_index, recommended_hfov_deg, load_calibration, project_point_to_plane, signed_distance_to_plane, calc_plane_basis, solve_plane_uv, clamp01  # type: ignore
 
 # Centralized gestures engine
-try:
-    from new_rasp.gestures import GesturesEngine  # type: ignore
-except Exception:
-    try:
-        from gestures import GesturesEngine  # type: ignore
-    except Exception:
-        GesturesEngine = None  # type: ignore
+from gestures import GesturesEngine  # type: ignore
 
 ## Legacy MediaPipe helpers removed in favor of centralized gestures engine
 
@@ -111,51 +85,44 @@ if IS_WINDOWS:
     MOUSEEVENTF_LEFTUP = 0x0004
     MOUSEEVENTF_WHEEL = 0x0800
 
-    def mouse_move_to(x: int, y: int) -> None:
+    def mouse_move_to(x, y):
         user32.SetCursorPos(int(x), int(y))
 
-    def mouse_left_down() -> None:
+    def mouse_left_down():
         user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
 
-    def mouse_left_up() -> None:
+    def mouse_left_up():
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
-    def mouse_scroll(dy: int) -> None:
+    def mouse_scroll(dy):
         # dy is in wheel ticks; Windows uses multiples of 120
         user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, int(dy), 0)
 
-    def _disable_console_quick_edit() -> None:
-        try:
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            STD_INPUT_HANDLE = -10
-            h_stdin = kernel32.GetStdHandle(STD_INPUT_HANDLE)
-            mode = ctypes.c_uint32()
-            if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
-                ENABLE_QUICK_EDIT_MODE = 0x0040
-                ENABLE_EXTENDED_FLAGS = 0x0080
-                new_mode = (mode.value | ENABLE_EXTENDED_FLAGS) & (~ENABLE_QUICK_EDIT_MODE)
-                kernel32.SetConsoleMode(h_stdin, new_mode)
-        except Exception:
-            # Non-fatal; continue without disabling QuickEdit
-            pass
+    def _disable_console_quick_edit():
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        STD_INPUT_HANDLE = -10
+        h_stdin = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
+            ENABLE_QUICK_EDIT_MODE = 0x0040
+            ENABLE_EXTENDED_FLAGS = 0x0080
+            new_mode = (mode.value | ENABLE_EXTENDED_FLAGS) & (~ENABLE_QUICK_EDIT_MODE)
+            kernel32.SetConsoleMode(h_stdin, new_mode)
 else:
-    try:
-        from pynput.mouse import Button as _Btn, Controller as _Ctl  # type: ignore
-    except Exception as exc:  # pragma: no cover - non-Windows minimal fallback
-        raise RuntimeError("Mouse control requires Windows ctypes or pynput installed") from exc
+    from pynput.mouse import Button as _Btn, Controller as _Ctl  # type: ignore
 
     _mouse = _Ctl()
 
-    def mouse_move_to(x: int, y: int) -> None:
+    def mouse_move_to(x, y):
         _mouse.position = (int(x), int(y))
 
-    def mouse_left_down() -> None:
+    def mouse_left_down():
         _mouse.press(_Btn.left)
 
-    def mouse_left_up() -> None:
+    def mouse_left_up():
         _mouse.release(_Btn.left)
 
-    def mouse_scroll(dy: int) -> None:
+    def mouse_scroll(dy):
         # Convert Windows-style ticks to lines: positive up, negative down
         _mouse.scroll(0, int(dy / 120))
 
@@ -164,24 +131,10 @@ else:
 
 
 def _create_gestures_engine():
-    try:
-        if GesturesEngine is not None:
-            return GesturesEngine()
-    except Exception:
-        return None
-    return None
+    return GesturesEngine()
 
 
-def run_stereo_projection(
-    calib_path: str,
-    *,
-    show_debug_windows: Optional[bool] = None,
-    ema_alpha: Optional[float] = None,
-    screen_offset_px: Optional[Tuple[int, int]] = None,
-    press_threshold_m: Optional[float] = None,
-    release_debounce_sec: Optional[float] = None,
-    press_debounce_sec: Optional[float] = None,
-) -> int:
+def run_stereo_projection(calib_path):
     # Avoid console freeze when clicking inside PowerShell/Terminal on Windows
     if IS_WINDOWS:
         _disable_console_quick_edit()
@@ -221,24 +174,24 @@ def run_stereo_projection(
         p.start()
 
     windows = [f"Stereo Cam{i+1}" for i in range(len(processors))]
-    # Resolve effective settings (fall back to top-level config if None was provided)
-    effective_show_debug = SHOW_DEBUG_WINDOWS_DEFAULT if show_debug_windows is None else bool(show_debug_windows)
+    # Effective settings from configuration constants
+    effective_show_debug = SHOW_DEBUG_WINDOWS_DEFAULT
     effective_win_w, effective_win_h = DEBUG_WINDOW_SIZE_PX
-    effective_ema_alpha = EMA_ALPHA if ema_alpha is None else float(ema_alpha)
-    effective_screen_offset = SCREEN_OFFSET_PX if screen_offset_px is None else tuple(screen_offset_px)
-    effective_press_threshold_m = PRESS_THRESHOLD_M if press_threshold_m is None else float(press_threshold_m)
-    effective_release_debounce = RELEASE_DEBOUNCE_SEC if release_debounce_sec is None else float(release_debounce_sec)
-    effective_press_debounce = PRESS_DEBOUNCE_SEC if press_debounce_sec is None else float(press_debounce_sec)
+    effective_ema_alpha = EMA_ALPHA
+    effective_screen_offset = SCREEN_OFFSET_PX
+    effective_press_threshold_m = PRESS_THRESHOLD_M
+    effective_release_debounce = RELEASE_DEBOUNCE_SEC
+    effective_press_debounce = PRESS_DEBOUNCE_SEC
 
     if effective_show_debug:
         for title in windows:
             cv2.namedWindow(title, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(title, effective_win_w, effective_win_h)
 
-    smoothed_xy: Optional[Tuple[float, float]] = None
-    is_mouse_down: bool = False
-    release_candidate_since: Optional[float] = None
-    press_candidate_since: Optional[float] = None
+    smoothed_xy = None
+    is_mouse_down = False
+    release_candidate_since = None
+    press_candidate_since = None
     # Gesture timing specs (from configuration)
     point_down_debounce = POINT_DOWN_DEBOUNCE_SEC
     point_up_cooldown = POINT_UP_COOLDOWN_SEC
@@ -247,17 +200,17 @@ def run_stereo_projection(
     pinch_up_debounce = PINCH_UP_DEBOUNCE_SEC
 
     # Gesture state
-    point_candidate_since: Optional[float] = None
-    point_clicking: bool = False
-    point_click_down_time: Optional[float] = None
-    gesture_cooldown_until: float = 0.0
-    pinch_candidate_since: Optional[float] = None
-    pinch_release_candidate_since: Optional[float] = None
-    pinch_active: bool = False
+    point_candidate_since = None
+    point_clicking = False
+    point_click_down_time = None
+    gesture_cooldown_until = 0.0
+    pinch_candidate_since = None
+    pinch_release_candidate_since = None
+    pinch_active = False
     # Scroll behavior
     scroll_debounce = SCROLL_DEBOUNCE_SEC
     scroll_tick = SCROLL_TICK_WHEEL  # smaller than 120 for slower scrolling
-    last_scroll_time: float = 0.0
+    last_scroll_time = 0.0
 
     try:
         while True:
@@ -271,41 +224,38 @@ def run_stereo_projection(
 
             # Run gesture recognition on the first camera only
             gesture_text = "none"
-            current_gestures: set = set()
+            current_gestures = set()
             if gesture_engine is not None and frames and frames[0] is not None:
-                try:
-                    labels, names = gesture_engine.recognize(frames[0])
-                    if labels:
-                        gesture_text = ", ".join([f"{l}:{s:.2f}" for l, s in labels])
-                    # Choose highest-confidence gesture per frame, with tie-break priority
-                    # priority: pinch > point > thumb_up > thumb_down
-                    priority = {"pinch": 0, "point": 1, "thumb_up": 2, "thumb_down": 3}
-                    scores = {}
-                    for raw, sc in labels:
-                        base = raw.split("-", 1)[-1]
-                        if base == "thumbs_up":
-                            key = "thumb_up"
-                        elif base == "thumbs_down":
-                            key = "thumb_down"
-                        elif base == "pinch":
-                            key = "pinch"
-                        elif base == "index_only":
-                            key = "point"
-                        else:
-                            continue
-                        prev = scores.get(key)
-                        if (prev is None) or (sc > prev):
-                            scores[key] = float(sc)
-                    chosen_gesture = None
-                    if scores:
-                        # max by score, then by priority
-                        chosen_gesture = max(
-                            scores.items(),
-                            key=lambda kv: (kv[1], -priority.get(kv[0], 9999)),
-                        )[0]
-                    current_gestures = set([chosen_gesture]) if chosen_gesture else set()
-                except Exception:
-                    pass
+                labels, names = gesture_engine.recognize(frames[0])
+                if labels:
+                    gesture_text = ", ".join([f"{l}:{s:.2f}" for l, s in labels])
+                # Choose highest-confidence gesture per frame, with tie-break priority
+                # priority: pinch > point > thumb_up > thumb_down
+                priority = {"pinch": 0, "point": 1, "thumb_up": 2, "thumb_down": 3}
+                scores = {}
+                for raw, sc in labels:
+                    base = raw.split("-", 1)[-1]
+                    if base == "thumbs_up":
+                        key = "thumb_up"
+                    elif base == "thumbs_down":
+                        key = "thumb_down"
+                    elif base == "pinch":
+                        key = "pinch"
+                    elif base == "index_only":
+                        key = "point"
+                    else:
+                        continue
+                    prev = scores.get(key)
+                    if (prev is None) or (sc > prev):
+                        scores[key] = float(sc)
+                chosen_gesture = None
+                if scores:
+                    # max by score, then by priority
+                    chosen_gesture = max(
+                        scores.items(),
+                        key=lambda kv: (kv[1], -priority.get(kv[0], 9999)),
+                    )[0]
+                current_gestures = set([chosen_gesture]) if chosen_gesture else set()
 
             # Draw and get index tip per view
             index_pts = []
@@ -373,22 +323,16 @@ def run_stereo_projection(
                                 if press_candidate_since is None:
                                     press_candidate_since = now
                                 elif (now - press_candidate_since) >= effective_press_debounce:
-                                    try:
-                                        mouse_left_down()
-                                        is_mouse_down = True
-                                    except Exception:
-                                        pass
+                                    mouse_left_down()
+                                    is_mouse_down = True
                             release_candidate_since = None
                         else:
                             if is_mouse_down:
                                 if release_candidate_since is None:
                                     release_candidate_since = now
                                 elif (now - release_candidate_since) >= effective_release_debounce:
-                                    try:
-                                        mouse_left_up()
-                                        is_mouse_down = False
-                                    except Exception:
-                                        pass
+                                    mouse_left_up()
+                                    is_mouse_down = False
                                     release_candidate_since = None
                             press_candidate_since = None
 
@@ -398,11 +342,8 @@ def run_stereo_projection(
                     if release_candidate_since is None:
                         release_candidate_since = now
                     elif (now - release_candidate_since) >= effective_release_debounce:
-                        try:
-                            mouse_left_up()
-                            is_mouse_down = False
-                        except Exception:
-                            pass
+                        mouse_left_up()
+                        is_mouse_down = False
                         release_candidate_since = None
                 if not had_valid_point:
                     press_candidate_since = None
@@ -418,11 +359,8 @@ def run_stereo_projection(
                     if point_candidate_since is None:
                         point_candidate_since = now
                     elif (now - point_candidate_since) >= point_down_debounce:
-                        try:
-                            mouse_left_down()
-                            is_mouse_down = True
-                        except Exception:
-                            pass
+                        mouse_left_down()
+                        is_mouse_down = True
                         point_clicking = True
                         point_click_down_time = now
                         action = "point_click_down"
@@ -431,11 +369,8 @@ def run_stereo_projection(
 
                 if (not pinch_active) and point_clicking and point_click_down_time is not None:
                     if (now - point_click_down_time) >= point_click_duration:
-                        try:
-                            mouse_left_up()
-                            is_mouse_down = False
-                        except Exception:
-                            pass
+                        mouse_left_up()
+                        is_mouse_down = False
                         point_clicking = False
                         point_candidate_since = None
                         point_click_down_time = None
@@ -449,11 +384,8 @@ def run_stereo_projection(
                         if pinch_candidate_since is None:
                             pinch_candidate_since = now
                         elif (now - pinch_candidate_since) >= pinch_down_debounce:
-                            try:
-                                mouse_left_down()
-                                is_mouse_down = True
-                            except Exception:
-                                pass
+                            mouse_left_down()
+                            is_mouse_down = True
                             pinch_active = True
                             # Cancel any pending point click state to avoid override
                             point_clicking = False
@@ -471,11 +403,8 @@ def run_stereo_projection(
                             if pinch_release_candidate_since is None:
                                 pinch_release_candidate_since = now
                             elif (now - pinch_release_candidate_since) >= pinch_up_debounce:
-                                try:
-                                    mouse_left_up()
-                                    is_mouse_down = False
-                                except Exception:
-                                    pass
+                                mouse_left_up()
+                                is_mouse_down = False
                                 pinch_active = False
                                 pinch_candidate_since = None
                                 pinch_release_candidate_since = None
@@ -485,19 +414,13 @@ def run_stereo_projection(
                 if (not pinch_active) and (not point_clicking) and (not in_cooldown):
                     can_scroll = (now - last_scroll_time) >= scroll_debounce
                     if can_scroll and ("thumb_up" in current_gestures):
-                        try:
-                            mouse_scroll(+scroll_tick)
-                            last_scroll_time = now
-                            action = "scroll_up"
-                        except Exception:
-                            pass
+                        mouse_scroll(+scroll_tick)
+                        last_scroll_time = now
+                        action = "scroll_up"
                     elif can_scroll and ("thumb_down" in current_gestures):
-                        try:
-                            mouse_scroll(-scroll_tick)
-                            last_scroll_time = now
-                            action = "scroll_down"
-                        except Exception:
-                            pass
+                        mouse_scroll(-scroll_tick)
+                        last_scroll_time = now
+                        action = "scroll_down"
 
             # Print exactly one line per frame, including action summary
             if had_valid_point:
@@ -513,40 +436,24 @@ def run_stereo_projection(
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-    except KeyboardInterrupt:
-        pass
     finally:
         for p in processors:
             p.stop()
         for c in cams:
-            try:
-                c.stop()
-            except Exception:
-                pass
+            c.stop()
         # Ensure mouse is released on exit
-        try:
-            if 'is_mouse_down' in locals() and is_mouse_down:
-                mouse_left_up()
-        except Exception:
-            pass
-        if show_debug_windows:
+        if 'is_mouse_down' in locals() and is_mouse_down:
+            mouse_left_up()
+        if effective_show_debug:
             cv2.destroyAllWindows()
 
     return 0
 
 
-def main() -> int:
+def main():
     # Fixed defaults (CLI modifiers removed). Use top-level configuration values.
     calib_path = os.path.join(os.path.dirname(__file__), "screen_corners_3d.json")
-    return run_stereo_projection(
-        calib_path,
-        show_debug_windows=SHOW_DEBUG_WINDOWS_DEFAULT,
-        ema_alpha=EMA_ALPHA,
-        screen_offset_px=SCREEN_OFFSET_PX,
-        press_threshold_m=PRESS_THRESHOLD_M,
-        release_debounce_sec=RELEASE_DEBOUNCE_SEC,
-        press_debounce_sec=PRESS_DEBOUNCE_SEC,
-    )
+    return run_stereo_projection(calib_path)
 
 
 if __name__ == "__main__":

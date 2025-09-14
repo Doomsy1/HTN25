@@ -5,9 +5,8 @@ import threading
 import time
 import cv2  # type: ignore
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Body
 from fastapi.responses import JSONResponse
-from typing import Optional, Dict, Any, Tuple, List
 
 
 # Ensure we can import modules from new_rasp/ by adding it to sys.path
@@ -19,21 +18,9 @@ if NEW_RASP_DIR not in sys.path:
     sys.path.insert(0, NEW_RASP_DIR)
 
 
-# Import calibration entrypoint from existing code
-try:
-    from calibrate_projector_corners_stereo import calibrate_projector_corners_stereo  # type: ignore
-except Exception as exc:  # pragma: no cover
-    raise RuntimeError("Failed to import calibrator from new_rasp/") from exc
-
-# Optional stream helpers to read RTSP frames for ball calibration
-try:
-    from streamcam import start_stream as _start_stream, read_frame_bgr as _read_frame_bgr  # type: ignore
-except Exception:
-    try:
-        from new_rasp.streamcam import start_stream as _start_stream, read_frame_bgr as _read_frame_bgr  # type: ignore
-    except Exception:
-        _start_stream = None  # type: ignore
-        _read_frame_bgr = None  # type: ignore
+# Import calibration entrypoint and stream helpers from new_rasp
+from calibrate_projector_corners_stereo import calibrate_projector_corners_stereo  # type: ignore
+from streamcam import start_stream as _start_stream, read_frame_bgr as _read_frame_bgr  # type: ignore
 
 
 APP = FastAPI(title="HTN25 Stereo API", version="0.1.0")
@@ -75,17 +62,17 @@ class SingleBallStore:
     - `get_and_clear()` pops and clears the current ball if not expired.
     """
 
-    def __init__(self, expire_ms: int = 250, vel_window_ms: int = 150) -> None:
+    def __init__(self, expire_ms=250, vel_window_ms=150):
         self.expire_ms = int(expire_ms)
         self.vel_window_ms = int(vel_window_ms)
         self._lock = threading.Lock()
-        self._current: Optional[Dict[str, Any]] = None
-        self._last_monotonic: Optional[float] = None
+        self._current = None
+        self._last_monotonic = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._thread.start()
 
-    def _watchdog_loop(self) -> None:
+    def _watchdog_loop(self):
         # Periodically clear expired state so it doesn't linger
         while not self._stop.is_set():
             now_m = time.monotonic()
@@ -97,14 +84,11 @@ class SingleBallStore:
                         self._last_monotonic = None
             self._stop.wait(0.02)  # 20ms cadence
 
-    def stop(self) -> None:
+    def stop(self):
         self._stop.set()
-        try:
-            self._thread.join(timeout=0.5)
-        except Exception:
-            pass
+        self._thread.join(timeout=0.5)
 
-    def offer(self, position_m: Tuple[float, float, float], t_epoch: Optional[float] = None) -> None:
+    def offer(self, position_m, t_epoch=None):
         now_epoch = float(time.time() if t_epoch is None else t_epoch)
         now_mono = time.monotonic()
         px, py, pz = float(position_m[0]), float(position_m[1]), float(position_m[2])
@@ -126,7 +110,7 @@ class SingleBallStore:
             }
             self._last_monotonic = now_mono
 
-    def get_and_clear(self) -> Optional[Dict[str, Any]]:
+    def get_and_clear(self):
         now_mono = time.monotonic()
         with self._lock:
             if self._current is None or self._last_monotonic is None:
@@ -147,34 +131,32 @@ class SingleBallStore:
 _ball_store = SingleBallStore(expire_ms=250, vel_window_ms=150)
 
 
-def _run_projector_calibration_background() -> None:
+def _run_projector_calibration_background():
     global _is_calibrating_projector, _last_calibration_time_iso, _projector_calib_data
-    try:
-        out_data, out_path = calibrate_projector_corners_stereo(show=False)
-        if out_data is not None:
-            _last_calibration_time_iso = out_data.get("timestamp")
-            _projector_calib_data = out_data
-    finally:
-        # Mark as done
-        with _calibration_lock:
-            _is_calibrating_projector = False
+    out_data, out_path = calibrate_projector_corners_stereo(show=False)
+    if out_data is not None:
+        _last_calibration_time_iso = out_data.get("timestamp")
+        _projector_calib_data = out_data
+    # Mark as done
+    with _calibration_lock:
+        _is_calibrating_projector = False
 
 
-def _run_ball_calibration_background() -> None:
+def _run_ball_calibration_background():
     global _is_calibrating_ball, _ball_calib_data
-    try:
-        proj = _projector_calib_data or _try_load_json(PROJECTOR_JSON_PATH)
-        if proj is None:
-            # Nothing to do; projector calibration missing
-            return
-        _calibrate_ball_tracker(proj)
-        _ball_calib_data = _try_load_json(BALL_JSON_PATH)
-    finally:
+    proj = _projector_calib_data or _try_load_json(PROJECTOR_JSON_PATH)
+    if proj is None:
+        # Nothing to do; projector calibration missing
         with _calibration_lock:
             _is_calibrating_ball = False
+        return
+    _calibrate_ball_tracker(proj)
+    _ball_calib_data = _try_load_json(BALL_JSON_PATH)
+    with _calibration_lock:
+        _is_calibrating_ball = False
 
 
-def _calibrate_ball_tracker(projector_calib: Dict[str, Any]) -> None:
+def _calibrate_ball_tracker(projector_calib):
     """
     Derive and persist ball-tracker calibration from the latest projector calibration.
 
@@ -183,7 +165,7 @@ def _calibrate_ball_tracker(projector_calib: Dict[str, Any]) -> None:
     """
     global _last_ball_calibration_time_iso
     # Prefer sources from the projector calibration JSON
-    sources: List[str] = projector_calib.get("sources", [])
+    sources = projector_calib.get("sources", [])
     if not sources or len(sources) < 2 or _start_stream is None or _read_frame_bgr is None:
         # Not enough info to sample streams; persist defaults tied to projector calib
         data = {
@@ -200,68 +182,42 @@ def _calibrate_ball_tracker(projector_calib: Dict[str, Any]) -> None:
         return
 
     # Sample a few frames to compute darkest pixel baseline per camera
-    try:
-        stream1 = _start_stream(sources[0], width=None)
-        stream2 = _start_stream(sources[1], width=None)
-    except Exception:
-        # If starting streams fails, persist defaults
-        data = {
-            "timestamp": projector_calib.get("timestamp", time.time()),
-            "sources": sources,
-            "delta_thr": -20,
-            "min_area": 400,
-            "blur_k": 5,
-            "close_k": 5,
-            "calib_min": [0, 0],
-        }
-        _write_ball_calibration(data)
-        _last_ball_calibration_time_iso = projector_calib.get("timestamp")
-        return
+    stream1 = _start_stream(sources[0], width=None)
+    stream2 = _start_stream(sources[1], width=None)
 
-    try:
-        mins = [255, 255]
-        samples = 10
-        for _ in range(samples):
-            f1 = _read_frame_bgr(stream1)
-            f2 = _read_frame_bgr(stream2)
-            if f1 is not None:
-                g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
-                mins[0] = min(mins[0], int(g1.min()))
-            if f2 is not None:
-                g2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
-                mins[1] = min(mins[1], int(g2.min()))
-            time.sleep(0.02)
-        data = {
-            "timestamp": projector_calib.get("timestamp", time.time()),
-            "sources": sources,
-            "delta_thr": -20,
-            "min_area": 400,
-            "blur_k": 5,
-            "close_k": 5,
-            "calib_min": mins,
-        }
-        _write_ball_calibration(data)
-        _last_ball_calibration_time_iso = projector_calib.get("timestamp")
-    finally:
-        try:
-            stream1.stop()
-        except Exception:
-            pass
-        try:
-            stream2.stop()
-        except Exception:
-            pass
+    mins = [255, 255]
+    samples = 10
+    for _ in range(samples):
+        f1 = _read_frame_bgr(stream1)
+        f2 = _read_frame_bgr(stream2)
+        if f1 is not None:
+            g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+            mins[0] = min(mins[0], int(g1.min()))
+        if f2 is not None:
+            g2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
+            mins[1] = min(mins[1], int(g2.min()))
+        time.sleep(0.02)
+    data = {
+        "timestamp": projector_calib.get("timestamp", time.time()),
+        "sources": sources,
+        "delta_thr": -20,
+        "min_area": 400,
+        "blur_k": 5,
+        "close_k": 5,
+        "calib_min": mins,
+    }
+    _write_ball_calibration(data)
+    _last_ball_calibration_time_iso = projector_calib.get("timestamp")
+    stream1.stop()
+    stream2.stop()
 
 
-def _write_ball_calibration(data: Dict[str, Any]) -> None:
+def _write_ball_calibration(data):
     here = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(here, "new_rasp", "ball_calibration.json")
-    try:
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        print(f"[server] Saved ball calibration to {out_path}")
-    except Exception as exc:
-        print(f"[server] Failed to save ball calibration: {exc}")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    print(f"[server] Saved ball calibration to {out_path}")
 
 
 @APP.post("/calibrate_projector")
@@ -289,7 +245,7 @@ def start_calibration_ball():
 
 
 @APP.get("/is_calibrated")
-def is_calibrated() -> bool:
+def is_calibrated():
     # True if neither projector nor ball calibration is currently running
     with _calibration_lock:
         return (not _is_calibrating_projector) and (not _is_calibrating_ball)
@@ -315,9 +271,23 @@ def get_ball():
     return event
 
 
-def offer_ball(position_m, t: Optional[float] = None) -> None:
+def offer_ball(position_m, t=None):
     # Publish a new ball sample to the single-ball store.
     _ball_store.offer((float(position_m[0]), float(position_m[1]), float(position_m[2])), t_epoch=float(time.time() if t is None else t))
+
+
+@APP.post("/offer_ball")
+def api_offer_ball(payload: dict = Body(...)):
+    # Accepts JSON like {"position_m": [x,y,z], "t": optional_epoch_seconds}
+    pos = payload.get("position_m") or payload.get("position") or payload.get("p")
+    if not pos or not isinstance(pos, (list, tuple)) or len(pos) != 3:
+        raise HTTPException(status_code=400, detail="position_m must be [x,y,z]")
+    t = payload.get("t")
+    try:
+        offer_ball(pos, t=t)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid payload: {exc}")
+    return {"ok": True}
 
 
 if __name__ == "__main__":

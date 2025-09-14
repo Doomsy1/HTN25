@@ -1,32 +1,23 @@
 import os
+import json
 from collections import deque
-from typing import Deque, Optional, Tuple, List, Dict, Any
 import time
 
 import cv2
 import numpy as np
 
-# Stream helpers (prefer local module path, fallback to same dir import)
-try:
-    from new_rasp.streamcam import start_stream, read_frame_bgr
-except Exception:
-    from streamcam import start_stream, read_frame_bgr  # type: ignore
+# Stream helpers
+from streamcam import start_stream, read_frame_bgr  # type: ignore
 
 # Stereo utilities for triangulation and calibration
-try:
-    from new_rasp.stereo_utils import (
-        triangulate_index,
-        load_calibration,
-    )
-except Exception:
-    from stereo_utils import triangulate_index, load_calibration  # type: ignore
+from stereo_utils import triangulate_index, load_calibration  # type: ignore
 
 
-CALIB_MIN_BY_CAM: Dict[int, int] = {}
-CALIB_MSG_UNTIL_BY_CAM: Dict[int, float] = {}
+CALIB_MIN_BY_CAM = {}
+CALIB_MSG_UNTIL_BY_CAM = {}
 
 
-def resize_with_aspect(image: np.ndarray, width: Optional[int]) -> np.ndarray:
+def resize_with_aspect(image, width):
     if width is None:
         return image
     h, w = image.shape[:2]
@@ -36,7 +27,7 @@ def resize_with_aspect(image: np.ndarray, width: Optional[int]) -> np.ndarray:
     return cv2.resize(image, (int(width), int(h * scale)), interpolation=cv2.INTER_LINEAR)
 
 
-def compute_fps(prev_time: float, frame_count: int, interval_s: float = 1.0) -> Tuple[float, float, int]:
+def compute_fps(prev_time, frame_count, interval_s=1.0):
     now = time.time()
     elapsed = now - prev_time
     if elapsed >= interval_s:
@@ -45,19 +36,19 @@ def compute_fps(prev_time: float, frame_count: int, interval_s: float = 1.0) -> 
     return prev_time, -1.0, frame_count
 
 
-def calibrate_darkest(cam_id: int, gray_frame: np.ndarray) -> None:
+def calibrate_darkest(cam_id, gray_frame):
     darkest = int(np.min(gray_frame))
     CALIB_MIN_BY_CAM[cam_id] = darkest
     CALIB_MSG_UNTIL_BY_CAM[cam_id] = time.time() + 1.5
     print(f"[Calibrated cam{cam_id}] darkest={darkest}")
 
 
-def derive_hfov_from_intrinsics(fx: float, image_width: float) -> float:
+def derive_hfov_from_intrinsics(fx, image_width):
     # Horizontal FOV in radians from fx and image width
     return 2.0 * float(np.arctan((image_width * 0.5) / float(fx)))
 
 
-def main() -> None:
+def main():
     # Fixed defaults (no CLI args)
     calib_path = os.path.join(os.path.dirname(__file__), "screen_corners_3d.json")
     width = 960
@@ -72,9 +63,28 @@ def main() -> None:
     size_max_ratio = 2.5
     match_row_px = 25
 
+    # Server publish config (optional)
+    SERVER_OFFER_URL = os.environ.get("HTN25_BALL_URL", "http://127.0.0.1:8000/offer_ball")
+    SEND_MIN_INTERVAL_S = 0.05  # at most 20 Hz
+    last_sent_mono = 0.0
+
+    def _post_json(url, payload):
+        # Minimal stdlib JSON POST to avoid extra deps
+        try:
+            import urllib.request
+        except Exception:
+            return False
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=0.3) as _resp:
+                return True
+        except Exception:
+            return False
+
     # Load calibration (intrinsics, baseline, default sources)
     calib = load_calibration(calib_path)
-    sources: List[str] = calib.get("sources", [])
+    sources = calib.get("sources", [])
     fx = float(calib["fx"])  # pixels
     fy = float(calib["fy"])  # pixels
     cx = float(calib["cx"])  # pixels
@@ -91,7 +101,7 @@ def main() -> None:
         src2 = src2 or "rtsp://10.37.111.247:8554/cam2"
 
     if not str(src1).lower().startswith("rtsp://") or not str(src2).lower().startswith("rtsp://"):
-        print("[ERROR] Please supply RTSP URLs (via --source/--source2 or calibration JSON)")
+        print("[ERROR] Please supply RTSP URLs (via calibration JSON)")
         return
 
     print("[INFO] Using RTSP sources:")
@@ -101,7 +111,7 @@ def main() -> None:
     stream1 = start_stream(src1, width=None)
     stream2 = start_stream(src2, width=None)
 
-    points1: Deque[Optional[Tuple[int, int]]] = deque(maxlen=buffer_len)
+    points1 = deque(maxlen=buffer_len)
 
     if show_mask:
         cv2.namedWindow("Mask 1", cv2.WINDOW_NORMAL)
@@ -124,13 +134,10 @@ def main() -> None:
     calib_w = None
     calib_h = None
     if image_size is not None:
-        try:
-            calib_w = float(image_size[0])
-            calib_h = float(image_size[1])
-        except Exception:
-            calib_w = calib_h = None
+        calib_w = float(image_size[0])
+        calib_h = float(image_size[1])
 
-    def process_one(cam_id: int, frame: np.ndarray):
+    def process_one(cam_id, frame):
         if flip_view:
             frame = cv2.flip(frame, 1)
         orig_h, orig_w = frame.shape[:2]
@@ -169,7 +176,7 @@ def main() -> None:
         # Contour detection and selection
         contours, _hier = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        detections: List[Dict[str, Any]] = []
+        detections = []
         if len(contours) > 0:
             for c in contours:
                 if cv2.contourArea(c) < float(min_area):
@@ -220,15 +227,15 @@ def main() -> None:
 
         frame_out1 = mask1 = None
         frame_out2 = mask2 = None
-        dets1: List[Dict[str, Any]] = []
-        dets2: List[Dict[str, Any]] = []
+        dets1 = []
+        dets2 = []
         if f1 is not None:
             frame_out1, mask1, dets1 = process_one(1, f1)
         if f2 is not None:
             frame_out2, mask2, dets2 = process_one(2, f2)
 
         # Multi-object matching and triangulation
-        accepted_cam1: List[Tuple[int, int]] = []
+        accepted_cam1 = []
         if len(dets1) > 0 and len(dets2) > 0:
             used2 = set()
             for i, d1 in enumerate(dets1):
@@ -275,10 +282,7 @@ def main() -> None:
                 else:
                     uL, vL, uR, vR = u1_orig, v1_orig, u2_orig, v2_orig
 
-                try:
-                    Xcm, Ycm, Zcm = triangulate_index(float(uL), float(vL), float(uR), float(vR), fx, fy, cx, cy, baseline_m)
-                except Exception:
-                    continue
+                Xcm, Ycm, Zcm = triangulate_index(float(uL), float(vL), float(uR), float(vR), fx, fy, cx, cy, baseline_m)
 
                 # expected radius in resized cam1 frame at depth Z
                 # Use intrinsics-derived hFOV rather than a hard-coded value
@@ -293,7 +297,6 @@ def main() -> None:
                 color = (0, 255, 0) if not too_big else (0, 0, 255)
                 if frame_out1 is not None:
                     cv2.circle(frame_out1, d1["center"], int(d1["radius"]), color, 2)
-                    print(f"d1['center']: {d1['center']}")
                     cv2.circle(frame_out1, d1["center"], 3, (0, 0, 255), -1)
                     cv2.putText(
                         frame_out1,
@@ -310,6 +313,14 @@ def main() -> None:
                     cv2.circle(frame_out2, d2["center"], 3, (0, 0, 255), -1)
                 if not too_big:
                     accepted_cam1.append(d1["center"])
+
+                # Publish first valid ball position to server (non-blocking best-effort)
+                if (not too_big) and SERVER_OFFER_URL:
+                    nowm = time.monotonic()
+                    if (nowm - last_sent_mono) >= SEND_MIN_INTERVAL_S:
+                        payload = {"position_m": [float(Xcm), float(Ycm), float(Zcm)], "t": float(time.time())}
+                        _post_json(SERVER_OFFER_URL, payload)
+                        last_sent_mono = nowm
 
         # draw a simple trail for first accepted detection on cam1
         if len(accepted_cam1) > 0:

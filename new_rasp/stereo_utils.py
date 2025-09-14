@@ -1,6 +1,5 @@
 import math
 import json
-from typing import Tuple
 
 import numpy as np
 
@@ -18,7 +17,7 @@ except Exception:  # pragma: no cover
     _recommended_hfov = None
 
 
-def _local_intrinsics_from_hfov(width: int, height: int, hfov_deg: float) -> Tuple[float, float, float, float]:
+def _local_intrinsics_from_hfov(width, height, hfov_deg):
     cx = float(width) * 0.5
     cy = float(height) * 0.5
     hfov_rad = math.radians(float(hfov_deg))
@@ -28,9 +27,9 @@ def _local_intrinsics_from_hfov(width: int, height: int, hfov_deg: float) -> Tup
     return float(fx), float(fy), float(cx), float(cy)
 
 
-def _local_triangulate_pair(x_left: float, y_left: float, x_right: float, y_right: float,
-                            fx: float, fy: float, cx: float, cy: float,
-                            baseline_m: float) -> Tuple[float, float, float]:
+def _local_triangulate_pair(x_left, y_left, x_right, y_right,
+                            fx, fy, cx, cy,
+                            baseline_m):
     d = (float(x_left) - float(x_right))
     if abs(d) < 1e-6:
         return float("nan"), float("nan"), float("nan")
@@ -41,9 +40,9 @@ def _local_triangulate_pair(x_left: float, y_left: float, x_right: float, y_righ
     return float(X_mid), float(Y_left), float(Z)
 
 
-def _local_triangulate_pairs(points_left: np.ndarray, points_right: np.ndarray,
-                             fx: float, fy: float, cx: float, cy: float,
-                             baseline_m: float) -> np.ndarray:
+def _local_triangulate_pairs(points_left, points_right,
+                             fx, fy, cx, cy,
+                             baseline_m):
     xl = points_left[:, 0].astype(np.float64)
     yl = points_left[:, 1].astype(np.float64)
     xr = points_right[:, 0].astype(np.float64)
@@ -57,38 +56,38 @@ def _local_triangulate_pairs(points_left: np.ndarray, points_right: np.ndarray,
     return pts3d.astype(np.float64)
 
 
-def get_intrinsics(width: int, height: int, hfov_deg: float) -> Tuple[float, float, float, float]:
+def get_intrinsics(width, height, hfov_deg):
     if _intrinsics_from_hfov is not None:
         fx, fy, cx, cy, _ = _intrinsics_from_hfov(width, height, hfov_deg)
         return float(fx), float(fy), float(cx), float(cy)
     return _local_intrinsics_from_hfov(width, height, hfov_deg)
 
 
-def triangulate_pair(u_left: float, v_left: float, u_right: float, v_right: float,
-                     fx: float, fy: float, cx: float, cy: float,
-                     baseline_m: float) -> Tuple[float, float, float]:
+def triangulate_pair(u_left, v_left, u_right, v_right,
+                     fx, fy, cx, cy,
+                     baseline_m):
     if _triangulate_pair is not None:
         x, y, z = _triangulate_pair(u_left, v_left, u_right, v_right, fx, fy, cx, cy, baseline_m)
         return float(x), float(y), float(z)
     return _local_triangulate_pair(u_left, v_left, u_right, v_right, fx, fy, cx, cy, baseline_m)
 
 
-def triangulate_index(u_left: float, v_left: float, u_right: float, v_right: float,
-                      fx: float, fy: float, cx: float, cy: float,
-                      baseline_m: float) -> Tuple[float, float, float]:
+def triangulate_index(u_left, v_left, u_right, v_right,
+                      fx, fy, cx, cy,
+                      baseline_m):
     # Backwards-compatible alias used by existing modules
     return triangulate_pair(u_left, v_left, u_right, v_right, fx, fy, cx, cy, baseline_m)
 
 
-def triangulate_pairs(points_left: np.ndarray, points_right: np.ndarray,
-                      fx: float, fy: float, cx: float, cy: float,
-                      baseline_m: float) -> np.ndarray:
+def triangulate_pairs(points_left, points_right,
+                      fx, fy, cx, cy,
+                      baseline_m):
     if _triangulate_pairs is not None:
         return _triangulate_pairs(points_left, points_right, fx, fy, cx, cy, baseline_m)
     return _local_triangulate_pairs(points_left, points_right, fx, fy, cx, cy, baseline_m)
 
 
-def recommended_hfov_deg() -> float:
+def recommended_hfov_deg():
     if _recommended_hfov is not None:
         return float(_recommended_hfov(normal=True))
     return 66.0
@@ -96,7 +95,7 @@ def recommended_hfov_deg() -> float:
 
 
 # Shared stereo/projection helpers
-def load_calibration(json_path: str):
+def load_calibration(json_path):
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     intr = data.get("intrinsics", {})
@@ -124,18 +123,18 @@ def load_calibration(json_path: str):
     }
 
 
-def project_point_to_plane(point: np.ndarray, plane_point: np.ndarray, plane_normal: np.ndarray) -> np.ndarray:
+def project_point_to_plane(point, plane_point, plane_normal):
     v = point - plane_point
     dist = float(np.dot(v, plane_normal))
     return point - dist * plane_normal
 
 
-def signed_distance_to_plane(point: np.ndarray, plane_point: np.ndarray, plane_normal: np.ndarray) -> float:
+def signed_distance_to_plane(point, plane_point, plane_normal):
     v = point - plane_point
     return float(np.dot(v, plane_normal))
 
 
-def calc_plane_basis(corners3d: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calc_plane_basis(corners3d):
     # Expect corners: TL (P0), TR (P1), BR (P2), BL (P3)
     P0 = corners3d[0]
     P1 = corners3d[1]
@@ -150,7 +149,7 @@ def calc_plane_basis(corners3d: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.
     return U, V, N
 
 
-def solve_plane_uv(P: np.ndarray, P0: np.ndarray, U: np.ndarray, V: np.ndarray) -> Tuple[float, float]:
+def solve_plane_uv(P, P0, U, V):
     A = np.stack([U, V], axis=1)  # shape (3,2)
     b = (P - P0)
     sol, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
@@ -159,6 +158,6 @@ def solve_plane_uv(P: np.ndarray, P0: np.ndarray, U: np.ndarray, V: np.ndarray) 
     return a, c
 
 
-def clamp01(x: float) -> float:
+def clamp01(x):
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 

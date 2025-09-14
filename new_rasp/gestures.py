@@ -1,7 +1,6 @@
 import os
 import time
 import urllib.request
-from typing import List, Tuple, Optional, Set
 
 import cv2
 
@@ -19,7 +18,7 @@ MODEL_URL = "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "gesture_recognizer.task")
 
 
-def _ensure_model(path: str = MODEL_PATH, url: str = MODEL_URL) -> str:
+def _ensure_model(path=MODEL_PATH, url=MODEL_URL):
     if os.path.exists(path):
         return path
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -27,7 +26,7 @@ def _ensure_model(path: str = MODEL_PATH, url: str = MODEL_URL) -> str:
     return path
 
 
-def _canonical_thumb_label(raw: str) -> str:
+def _canonical_thumb_label(raw):
     s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
     if s in {"thumb_up", "thumbs_up", "thumbup", "thumbsup"}:
         return "thumbs_up"
@@ -36,8 +35,8 @@ def _canonical_thumb_label(raw: str) -> str:
     return ""
 
 
-def _filter_model_labels(model_labels: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
-    filtered: List[Tuple[str, float]] = []
+def _filter_model_labels(model_labels):
+    filtered = []
     for label, score in model_labels:
         raw = label.split("-", 1)[-1] if "-" in label else label
         canon = _canonical_thumb_label(raw)
@@ -65,9 +64,9 @@ class GesturesEngine:
     def __init__(
         self,
         *,
-        min_confidence: float = 0.3,
-        max_num_hands: int = 2,
-    ) -> None:
+        min_confidence=0.3,
+        max_num_hands=2,
+    ):
         model_file = _ensure_model(MODEL_PATH, MODEL_URL)
         base_options = mp_python.BaseOptions(model_asset_path=model_file)
         options = mp_vision.GestureRecognizerOptions(
@@ -95,14 +94,14 @@ class GesturesEngine:
         self._index_cos_thr = 0.86
         self._index_len_thr = 0.25
 
-    def close(self) -> None:
+    def close(self):
         try:
             self._hands.close()
         except Exception:
             pass
 
-    def _top_gesture_labels(self, result) -> List[Tuple[str, float]]:
-        labels: List[Tuple[str, float]] = []
+    def _top_gesture_labels(self, result):
+        labels = []
         if result is None:
             return labels
         if getattr(result, "gestures", None):
@@ -115,8 +114,8 @@ class GesturesEngine:
                 labels.append((f"hand{hand_idx+1}-{label}", score))
         return labels
 
-    def _compute_custom_labels(self, frame_bgr) -> List[Tuple[str, float]]:
-        labels: List[Tuple[str, float]] = []
+    def _compute_custom_labels(self, frame_bgr):
+        labels = []
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         try:
             hand_res = self._hands.process(frame_rgb)
@@ -163,7 +162,7 @@ class GesturesEngine:
                     ids_pip = {"thumb": 3, "index": 6, "middle": 10, "ring": 14, "pinky": 18}
                     ids_mcp = {"thumb": 2, "index": 5, "middle": 9, "ring": 13, "pinky": 17}
 
-                    def extension_score(name: str) -> float:
+                    def extension_score(name):
                         tip = pts[ids_tip[name]]
                         pip = pts[ids_pip[name]]
                         mcp = pts[ids_mcp[name]]
@@ -188,7 +187,7 @@ class GesturesEngine:
             pass
         return labels
 
-    def recognize(self, frame_bgr) -> Tuple[List[Tuple[str, float]], Set[str]]:
+    def recognize(self, frame_bgr):
         """
         Returns:
             labels: list of tuples ("handX-<label>", score)
@@ -196,7 +195,7 @@ class GesturesEngine:
         """
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         timestamp_ms = int(time.time() * 1000)
-        labels: List[Tuple[str, float]] = []
+        labels = []
         try:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
             result = self._recognizer.recognize_for_video(mp_image, timestamp_ms)
@@ -207,7 +206,7 @@ class GesturesEngine:
 
         labels.extend(self._compute_custom_labels(frame_bgr))
 
-        names: Set[str] = set()
+        names = set()
         for raw, _score in labels:
             base = raw.split("-", 1)[-1]
             if base == "thumbs_up":

@@ -8,12 +8,12 @@ from tkinter import ttk
 import cv2
 
 
-def _here(*paths: str) -> str:
+def _here(*paths):
     return os.path.join(os.path.dirname(__file__), *paths)
 
 
 class LauncherUI:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root):
         self.root = root
         self.root.title("HTN25 Launcher")
         # Pin window on top
@@ -59,7 +59,7 @@ class LauncherUI:
         # Periodic poll to update button states/text
         self.root.after(300, self._poll_children)
 
-    def _poll_children(self) -> None:
+    def _poll_children(self):
         # Update states based on running child processes
         calib_alive = (self.calib_proc is not None) and (self.calib_proc.poll() is None)
         demo_alive = (self.demo_proc is not None) and (self.demo_proc.poll() is None)
@@ -88,7 +88,7 @@ class LauncherUI:
 
         self.root.after(500, self._poll_children)
 
-    def _stop_process(self, proc_attr: str, wait_timeout: float = 0.8) -> None:
+    def _stop_process(self, proc_attr, wait_timeout=0.8):
         proc = getattr(self, proc_attr, None)
         if proc is None:
             return
@@ -107,7 +107,7 @@ class LauncherUI:
         finally:
             setattr(self, proc_attr, None)
 
-    def _generate_or_load_grid(self) -> str:
+    def _generate_or_load_grid(self):
         here = os.path.dirname(__file__)
         try:
             try:
@@ -121,7 +121,7 @@ class LauncherUI:
                 raise
             return fallback
 
-    def _show_fullscreen_grid(self, image_path: str, stop_event: threading.Event) -> None:
+    def _show_fullscreen_grid(self, image_path, stop_event):
         img = cv2.imread(image_path)
         if img is None:
             return
@@ -144,7 +144,7 @@ class LauncherUI:
             except Exception:
                 pass
 
-    def start_calibration(self) -> None:
+    def start_calibration(self):
         # Toggle: if calibration is running, stop it
         if (self.calib_proc is not None) and (self.calib_proc.poll() is None):
             self._stop_process("calib_proc")
@@ -174,7 +174,7 @@ class LauncherUI:
         except Exception:
             pass
 
-    def start_demo(self) -> None:
+    def start_demo(self):
         # Toggle: if demo is running, stop it
         if (self.demo_proc is not None) and (self.demo_proc.poll() is None):
             self._stop_process("demo_proc")
@@ -194,7 +194,7 @@ class LauncherUI:
         except Exception:
             pass
 
-    def _start_demo_subprocess(self) -> None:
+    def _start_demo_subprocess(self):
         # Helper that starts demo without toggling/stop logic, used after calibration
         if (self.demo_proc is not None) and (self.demo_proc.poll() is None):
             return
@@ -210,7 +210,7 @@ class LauncherUI:
         except Exception:
             pass
 
-    def on_close(self) -> None:
+    def on_close(self):
         # Stop any running children before closing
         self._stop_process("calib_proc")
         self._stop_process("demo_proc")
@@ -225,7 +225,7 @@ class LauncherUI:
             pass
 
 
-def main() -> int:
+def main():
     root = tk.Tk()
     LauncherUI(root)
     root.mainloop()

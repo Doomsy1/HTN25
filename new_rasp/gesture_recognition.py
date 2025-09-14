@@ -13,11 +13,7 @@ except ImportError:
     sys.exit(1)
 
 # Stream helpers (used for URL sources)
-try:
-    from streamcam import start_camera, read_frame_bgr
-except Exception:
-    start_camera = None
-    read_frame_bgr = None
+# No stream helpers; default to webcam capture
 
 # Model download info
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task"
@@ -37,32 +33,12 @@ def ensure_model(path=MODEL_PATH, url=MODEL_URL):
     return path
 
 
-def is_url(s: str) -> bool:
+def is_url(s):
     return "://" in s
 
 
 def build_input_source(argv):
-    # Prioritize webcam by default.
-    # Forms:
-    # - no args -> webcam index 0
-    # - "webcam" or integer -> webcam
-    # - full URL or ip port -> URL
-    if not argv:
-        return ("webcam", 0)
-    if len(argv) == 1:
-        token = argv[0].strip()
-        if token.lower() == "webcam":
-            return ("webcam", 0)
-        if token.isdigit():
-            return ("webcam", int(token))
-        if is_url(token):
-            return ("url", token)
-        # Fallback: treat as URL host expecting default RTSP port path
-        return ("url", token)
-    if len(argv) >= 2:
-        ip = argv[0].strip()
-        port = argv[1].strip()
-        return ("url", f"rtsp://{ip}:{port}")
+    return ("webcam", 0)
 
 
 def draw_overlay(frame_bgr, top_gestures):
@@ -115,8 +91,8 @@ def open_webcam(index=0):
     return cap
 
 
-def main(argv=None):
-    argv = argv or sys.argv[1:]
+def main():
+    argv = sys.argv[1:]
     source_kind, source_value = build_input_source(argv)
 
     model_file = ensure_model(MODEL_PATH, MODEL_URL)
@@ -137,39 +113,21 @@ def main(argv=None):
     cv2.resizeWindow(window_name, 1280 // 2, 720 // 2)
 
     # Select frame source
-    cap = None
-    stream = None
-    if source_kind == "webcam":
-        cap = open_webcam(source_value)
-        if not cap or not cap.isOpened():
-            print(f"Failed to open webcam at index {source_value}")
-            return 1
-    else:
-        if start_camera is None or read_frame_bgr is None:
-            print("Stream helpers unavailable and non-webcam source provided.")
-            return 1
-        stream = start_camera(source_value)
+    cap = open_webcam(source_value)
+    if not cap or not cap.isOpened():
+        print(f"Failed to open webcam at index {source_value}")
+        return 1
 
     try:
         while True:
             # Get frame
-            frame_bgr = None
-            if cap is not None:
-                ok, frame_bgr = cap.read()
-                if not ok:
-                    time.sleep(0.01)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
-                        break
-                    continue
-            else:
-                frame_bgr = read_frame_bgr(stream)
-                if frame_bgr is None:
-                    time.sleep(0.01)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
-                        break
-                    continue
+            ok, frame_bgr = cap.read()
+            if not ok:
+                time.sleep(0.01)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                continue
 
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -197,11 +155,6 @@ def main(argv=None):
         if cap is not None:
             try:
                 cap.release()
-            except Exception:
-                pass
-        if stream is not None:
-            try:
-                stream.stop()
             except Exception:
                 pass
 

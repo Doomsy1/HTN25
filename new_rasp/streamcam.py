@@ -43,20 +43,11 @@ class LatestFrameStream:
             except Exception:
                 pass
             if self.requested_width is not None:
-                try:
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(self.requested_width))
-                except Exception:
-                    pass
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(self.requested_width))
             if self.requested_height is not None:
-                try:
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(self.requested_height))
-                except Exception:
-                    pass
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(self.requested_height))
             if self.requested_fps is not None:
-                try:
-                    cap.set(cv2.CAP_PROP_FPS, int(self.requested_fps))
-                except Exception:
-                    pass
+                cap.set(cv2.CAP_PROP_FPS, int(self.requested_fps))
 
         self.cap = cap
 
@@ -95,10 +86,7 @@ class LatestFrameStream:
     def stop(self):
         self._stop.set()
         if self._thread is not None:
-            try:
-                self._thread.join(timeout=1.0)
-            except Exception:
-                pass
+            self._thread.join(timeout=1.0)
         if self.cap is not None:
             try:
                 self.cap.release()
@@ -119,11 +107,8 @@ def start_camera(index_or_url, width=None, height=None, fps=None):
 
 def set_fps(stream, fps):
     stream.requested_fps = int(fps)
-    try:
-        if stream.cap is not None:
-            stream.cap.set(cv2.CAP_PROP_FPS, int(fps))
-    except Exception:
-        pass
+    if stream.cap is not None:
+        stream.cap.set(cv2.CAP_PROP_FPS, int(fps))
 
 
 def read_frame_bgr(stream):
