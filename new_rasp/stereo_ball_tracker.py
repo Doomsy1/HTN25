@@ -62,7 +62,7 @@ def main() -> None:
     calib_path = os.path.join(os.path.dirname(__file__), "screen_corners_3d.json")
     width = 960
     buffer_len = 64
-    delta_thr = -50
+    delta_thr = -20
     min_area = 400
     blur_k = 5
     close_k = 5
@@ -110,9 +110,9 @@ def main() -> None:
         cv2.resizeWindow("Mask 2", 480, 360)
 
     cv2.namedWindow("Ball Tracker 1", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Ball Tracker 1", max(320, width), int(max(320, width) * 9 / 16))
+    cv2.resizeWindow("Ball Tracker 1", max(320, width//2), int(max(320, width//2) * 9 / 16))
     cv2.namedWindow("Ball Tracker 2", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Ball Tracker 2", max(320, width), int(max(320, width) * 9 / 16))
+    cv2.resizeWindow("Ball Tracker 2", max(320, width//2), int(max(320, width//2) * 9 / 16))
 
     prev_time = time.time()
     fps_value = -1.0
