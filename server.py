@@ -3,7 +3,9 @@ import sys
 import json
 import threading
 import time
+import logging
 import cv2  # type: ignore
+import logging
 
 from fastapi import FastAPI, HTTPException, Response, Body
 from fastapi.responses import JSONResponse
@@ -36,6 +38,15 @@ _last_ball_calibration_time_iso = None
 # Cached calibration data (avoid reading files repeatedly)
 _projector_calib_data = None
 _ball_calib_data = None
+
+
+# Minimal logging setup
+_logger = logging.getLogger("HTN25")
+if not _logger.handlers:
+    _logger.setLevel(logging.INFO)
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s"))
+    _logger.addHandler(_handler)
 
 
 def _try_load_json(path):
@@ -273,7 +284,16 @@ def get_ball():
 
 def offer_ball(position_m, t=None):
     # Publish a new ball sample to the single-ball store.
-    _ball_store.offer((float(position_m[0]), float(position_m[1]), float(position_m[2])), t_epoch=float(time.time() if t is None else t))
+    px = float(position_m[0])
+    py = float(position_m[1])
+    pz = float(position_m[2])
+    ts = float(time.time() if t is None else t)
+    logging.info(f"[server] ball positioned pos=({px:.3f},{py:.3f},{pz:.3f}) t={ts:.3f}")
+    _ball_store.offer((px, py, pz), t_epoch=ts)
+    try:
+        _logger.info(f"ball position: x={float(position_m[0]):.3f}, y={float(position_m[1]):.3f}, z={float(position_m[2]):.3f}")
+    except Exception:
+        pass
 
 
 @APP.post("/offer_ball")
