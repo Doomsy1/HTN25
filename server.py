@@ -99,7 +99,7 @@ class SingleBallStore:
         self._stop.set()
         self._thread.join(timeout=0.5)
 
-    def offer(self, position_m, t_epoch=None):
+    def offer(self, position_m, t_epoch=None, space=None, raw_px=None):
         now_epoch = float(time.time() if t_epoch is None else t_epoch)
         now_mono = time.monotonic()
         px, py, pz = float(position_m[0]), float(position_m[1]), float(position_m[2])
@@ -119,6 +119,10 @@ class SingleBallStore:
                 "position_m": [px, py, pz],
                 "velocity_mps": [vx, vy, vz],
             }
+            if space is not None:
+                self._current["space"] = str(space)
+            if raw_px is not None and isinstance(raw_px, (list, tuple)) and len(raw_px) == 2:
+                self._current["position_px"] = [float(raw_px[0]), float(raw_px[1])]
             self._last_monotonic = now_mono
 
     def get_and_clear(self):
@@ -282,32 +286,45 @@ def get_ball():
     return event
 
 
-def offer_ball(position_m, t=None):
+def offer_ball(position_m=None, position_px=None, t=None):
     # Publish a new ball sample to the single-ball store.
-    px = float(position_m[0])
-    py = float(position_m[1])
-    pz = float(position_m[2])
     ts = float(time.time() if t is None else t)
-    logging.info(f"[server] ball positioned pos=({px:.3f},{py:.3f},{pz:.3f}) t={ts:.3f}")
-    _ball_store.offer((px, py, pz), t_epoch=ts)
-    try:
-        _logger.info(f"ball position: x={float(position_m[0]):.3f}, y={float(position_m[1]):.3f}, z={float(position_m[2]):.3f}")
-    except Exception:
-        pass
+    if position_px is not None:
+        x = float(position_px[0]); y = float(position_px[1])
+        logging.info(f"[server] ball positioned (proj px)=({x:.1f},{y:.1f}) t={ts:.3f}")
+        _ball_store.offer((x, y, 0.0), t_epoch=ts, space="projector_px", raw_px=[x, y])
+        try:
+            _logger.info(f"ball position_px: x={x:.1f}, y={y:.1f}")
+        except Exception:
+            pass
+        return
+    if position_m is not None:
+        px = float(position_m[0]); py = float(position_m[1]); pz = float(position_m[2])
+        logging.info(f"[server] ball positioned pos=({px:.3f},{py:.3f},{pz:.3f}) t={ts:.3f}")
+        _ball_store.offer((px, py, pz), t_epoch=ts, space="meters")
+        try:
+            _logger.info(f"ball position_m: x={px:.3f}, y={py:.3f}, z={pz:.3f}")
+        except Exception:
+            pass
 
 
 @APP.post("/offer_ball")
 def api_offer_ball(payload: dict = Body(...)):
-    # Accepts JSON like {"position_m": [x,y,z], "t": optional_epoch_seconds}
-    pos = payload.get("position_m") or payload.get("position") or payload.get("p")
-    if not pos or not isinstance(pos, (list, tuple)) or len(pos) != 3:
-        raise HTTPException(status_code=400, detail="position_m must be [x,y,z]")
+    # Accepts JSON like {"position_px": [x,y]} or {"position_m": [x,y,z]}, plus optional "t"
+    pos_px = payload.get("position_px")
+    pos_m = payload.get("position_m") or payload.get("position") or payload.get("p")
     t = payload.get("t")
-    try:
-        offer_ball(pos, t=t)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid payload: {exc}")
-    return {"ok": True}
+    if pos_px is not None:
+        if not isinstance(pos_px, (list, tuple)) or len(pos_px) != 2:
+            raise HTTPException(status_code=400, detail="position_px must be [x,y]")
+        offer_ball(position_px=pos_px, t=t)
+        return {"ok": True}
+    if pos_m is not None:
+        if not isinstance(pos_m, (list, tuple)) or len(pos_m) != 3:
+            raise HTTPException(status_code=400, detail="position_m must be [x,y,z]")
+        offer_ball(position_m=pos_m, t=t)
+        return {"ok": True}
+    raise HTTPException(status_code=400, detail="payload must include position_px or position_m")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ import numpy as np
 from streamcam import start_stream, read_frame_bgr  # type: ignore
 
 # Stereo utilities for triangulation and calibration
-from stereo_utils import triangulate_index, load_calibration  # type: ignore
+from stereo_utils import triangulate_index, load_calibration, project_point_to_plane, signed_distance_to_plane, calc_plane_basis, solve_plane_uv, clamp01  # type: ignore
 
 
 CALIB_MIN_BY_CAM = {}
@@ -67,6 +67,8 @@ def main():
     SERVER_OFFER_URL = os.environ.get("HTN25_BALL_URL", "http://127.0.0.1:8000/offer_ball")
     SEND_MIN_INTERVAL_S = 0.05  # at most 20 Hz
     last_sent_mono = 0.0
+    last_post_ok = None
+    last_post_ts = 0.0
 
     def _post_json(url, payload):
         # Minimal stdlib JSON POST to avoid extra deps
@@ -77,9 +79,14 @@ def main():
         try:
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=0.3) as _resp:
-                return True
-        except Exception:
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                code = getattr(resp, 'status', 200)
+                return 200 <= int(code) < 300
+        except Exception as exc:
+            try:
+                print(f"[POST FAIL] {exc}")
+            except Exception:
+                pass
             return False
 
     # Load calibration (intrinsics, baseline, default sources)
@@ -91,6 +98,8 @@ def main():
     cy = float(calib["cy"])  # pixels
     baseline_m = float(calib["baseline_m"])  # meters
     image_size = calib.get("image_size", None)
+    proj_corners_px = np.array(calib.get("projector_corners_px", [[0.0,0.0],[1280.0,0.0],[1280.0,720.0],[0.0,720.0]]), dtype=np.float32)
+    screen_corners_3d = np.array(calib.get("screen_corners_3d", calib.get("screen_corners_3d_m", [])), dtype=np.float32)
 
     # Select sources: from calibration, fallback to defaults
     src1 = sources[0] if len(sources) >= 1 else None
@@ -130,12 +139,25 @@ def main():
     wait1 = 0.0
     wait2 = 0.0
 
-    # Determine calibration image size for pixel mapping
+    # Determine calibration image size for pixel mapping and projector transform
     calib_w = None
     calib_h = None
     if image_size is not None:
         calib_w = float(image_size[0])
         calib_h = float(image_size[1])
+
+    # Precompute plane basis and homography to projector pixel space
+    H_plane_to_proj = None
+    U = V = N = None
+    P0 = None
+    try:
+        if screen_corners_3d is not None and len(screen_corners_3d) >= 4 and proj_corners_px is not None and proj_corners_px.shape == (4, 2):
+            U, V, N = calc_plane_basis(screen_corners_3d)
+            P0 = screen_corners_3d[0]
+            plane_quad = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=np.float32)
+            H_plane_to_proj = cv2.getPerspectiveTransform(plane_quad, proj_corners_px.astype(np.float32))
+    except Exception:
+        H_plane_to_proj = None
 
     def process_one(cam_id, frame):
         if flip_view:
@@ -202,6 +224,11 @@ def main():
         # Overlays
         if fps_value >= 0:
             cv2.putText(frame_res, f"FPS:{fps_value:.1f} thr:{thr}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+        # Show last post status
+        if last_post_ok is not None:
+            status_txt = "POST:OK" if last_post_ok else "POST:FAIL"
+            color = (60, 220, 60) if last_post_ok else (40, 40, 220)
+            cv2.putText(frame_res, status_txt, (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
         until = CALIB_MSG_UNTIL_BY_CAM.get(cam_id, 0.0)
         if time.time() < until:
             cv2.putText(frame_res, "Calibrated", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
@@ -284,6 +311,19 @@ def main():
 
                 Xcm, Ycm, Zcm = triangulate_index(float(uL), float(vL), float(uR), float(vR), fx, fy, cx, cy, baseline_m)
 
+                # Project 3D point onto the screen plane, then map to projector pixels
+                px_proj = py_proj = None
+                if H_plane_to_proj is not None and U is not None and V is not None and P0 is not None:
+                    P = np.array([Xcm, Ycm, Zcm], dtype=np.float32)
+                    P_proj = project_point_to_plane(P, P0, N)
+                    a, b = solve_plane_uv(P_proj, P0, U, V)
+                    a_c = clamp01(float(a))
+                    b_c = clamp01(float(b))
+                    src_pt = np.array([[[a_c, b_c]]], dtype=np.float32)
+                    dst_pt = cv2.perspectiveTransform(src_pt, H_plane_to_proj)
+                    px_proj = float(dst_pt[0, 0, 0])
+                    py_proj = float(dst_pt[0, 0, 1])
+
                 # expected radius in resized cam1 frame at depth Z
                 # Use intrinsics-derived hFOV rather than a hard-coded value
                 hFOV = derive_hfov_from_intrinsics(fx, float(calib_w if calib_w is not None else o1w))
@@ -315,12 +355,18 @@ def main():
                     accepted_cam1.append(d1["center"])
 
                 # Publish first valid ball position to server (non-blocking best-effort)
-                if (not too_big) and SERVER_OFFER_URL:
+                # Send 2D projected pixel if available; otherwise skip publish
+                if SERVER_OFFER_URL and (px_proj is not None) and (py_proj is not None):
                     nowm = time.monotonic()
                     if (nowm - last_sent_mono) >= SEND_MIN_INTERVAL_S:
-                        payload = {"position_m": [float(Xcm), float(Ycm), float(Zcm)], "t": float(time.time())}
-                        _post_json(SERVER_OFFER_URL, payload)
+                        payload = {"position_px": [float(px_proj), float(py_proj)], "t": float(time.time())}
+                        ok = _post_json(SERVER_OFFER_URL, payload)
                         last_sent_mono = nowm
+                        last_post_ok = bool(ok)
+                        # Also print once per second to avoid spam
+                        if (time.time() - last_post_ts) >= 1.0:
+                            print(f"[POST {'OK' if ok else 'FAIL'}] to {SERVER_OFFER_URL} pos={payload.get('position_px')}")
+                            last_post_ts = time.time()
 
         # draw a simple trail for first accepted detection on cam1
         if len(accepted_cam1) > 0:
